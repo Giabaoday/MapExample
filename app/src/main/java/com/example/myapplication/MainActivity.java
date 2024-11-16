@@ -13,6 +13,19 @@ import android.preference.PreferenceManager;
 import android.util.Log;
 import android.widget.Toast;
 
+import okhttp3.Call;
+import okhttp3.Callback;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.util.List;
+
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -35,12 +48,14 @@ import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay;
 
 public class MainActivity extends AppCompatActivity implements LocationListener {
     private static final String TAG = "MainActivity";
-    private static final String BASE_URL = "http://10.0.2.2:3000"; // Localhost cho emulator
+    private static final String BASE_URL = "http://47.129.31.47:3000"; // Localhost cho emulator
     private static final int PERMISSION_REQUEST_CODE = 1;
 
     private MapView map;
     private LocationManager locationManager;
     private MyLocationNewOverlay myLocationOverlay;
+
+    private String token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3MzE3NDQ1ODEsImV4cCI6MTczMTgzMDk4MSwiYXVkIjoiNjcyNWQzZTNmMGZiM2NmZDg2MDA4Y2Y3IiwiaXNzIjoiMjI1MjAxMjBAZ20udWl0LmVkdS52biJ9.l_P0sohNnVmTk2oaG_ttG3PYYxlMFsKe5VV6JsRLziw";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -91,13 +106,18 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
                 if (isTileInBounds(x, y, zoom)) {
                     String url = BASE_URL + "/map/tiles/" + zoom + "/" + x + "/" + tmsY + ".png";
                     Log.d(TAG, "Requesting tile in bounds: " + url);
-                    return url;
+                    return url + "?Authorization=Bearer " + token;
                 } else {
                     Log.d(TAG, "Tile out of bounds: z=" + zoom + " x=" + x + " y=" + y);
                     return null;
                 }
             }
         };
+
+        Configuration.getInstance().getAdditionalHttpRequestProperties().put(
+                "Authorization",
+                "Bearer " + token
+        );
 
         // Setup map view
         map.setTileSource(tileSource);
@@ -119,6 +139,8 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
                 (MIN_LON + MAX_LON) / 2
         );
         map.getController().setCenter(center);
+
+        loadPotholes();
     }
 
     // Helper method để kiểm tra tile có nằm trong bounds không
@@ -207,6 +229,80 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
         } else {
             requestPermissions();
         }
+    }
+
+    private void loadPotholes() {
+        OkHttpClient client = new OkHttpClient();
+        Request request = new Request.Builder()
+                .url(BASE_URL + "/map/getAllPothole")
+                .addHeader("Authorization", "Bearer " + token)
+                .build();
+
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                Log.e(TAG, "Error loading potholes", e);
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+                if (response.isSuccessful() && response.body() != null) {
+                    String json = response.body().string();
+                    try {
+                        Gson gson = new Gson();
+                        Type type = new TypeToken<List<Pothole>>(){}.getType();
+                        List<Pothole> potholes = gson.fromJson(json, type);
+
+                        runOnUiThread(() -> displayPotholes(potholes));
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error parsing pothole data", e);
+                    }
+                }
+            }
+        });
+    }
+
+    private void displayPotholes(List<Pothole> potholes) {
+        // Clear existing markers
+        map.getOverlays().removeIf(overlay -> overlay instanceof Marker);
+
+        // Add markers for each pothole
+        for (Pothole pothole : potholes) {
+            Marker marker = new Marker(map);
+            marker.setPosition(new GeoPoint(
+                    pothole.getLocation().getCoordinates().getLatitude(),
+                    pothole.getLocation().getCoordinates().getLongitude()
+            ));
+
+            // Customize marker appearance based on severity
+            Drawable icon;
+            switch (pothole.getSeverity().getLevel()) {
+                case "High":
+                    icon = ContextCompat.getDrawable(this, R.drawable.marker_red);
+                    break;
+                case "Medium":
+                    icon = ContextCompat.getDrawable(this, R.drawable.marker_red);
+                    break;
+                default:
+                    icon = ContextCompat.getDrawable(this, R.drawable.marker_red);
+                    break;
+            }
+            marker.setIcon(icon);
+
+            // Add info window
+            marker.setTitle("Pothole");
+            marker.setSnippet(String.format(
+                    "Severity: %s\nDimension: %s\nDepth: %s",
+                    pothole.getSeverity().getLevel(),
+                    pothole.getDescription().getDimension(),
+                    pothole.getDescription().getDepth()
+            ));
+
+            map.getOverlays().add(marker);
+        }
+
+        // Refresh map
+        map.invalidate();
     }
 
     @Override
